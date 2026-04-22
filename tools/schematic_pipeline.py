@@ -159,3 +159,156 @@ def compile_schematic(ir: dict[str, Any]) -> dict[str, Any]:
 def normalize_roundtrip(ir: dict[str, Any]) -> dict[str, Any]:
     """Normalize via compile->decompile to compare equivalence deterministically."""
     return decompile_schematic(compile_schematic(ir))
+
+
+def _block_pos(block: dict[str, Any]) -> tuple[int, int, int]:
+    pos = block.get("pos", {})
+    if isinstance(pos, dict):
+        return (int(pos.get("x", 0)), int(pos.get("y", 0)), int(pos.get("z", 0)))
+    if isinstance(pos, (list, tuple)) and len(pos) == 3:
+        return (int(pos[0]), int(pos[1]), int(pos[2]))
+    return (0, 0, 0)
+
+
+def summarize_ir(ir: dict[str, Any]) -> dict[str, Any]:
+    """Create a retrieval-oriented summary for a Create IR payload.
+
+    Summary fields are intentionally compact so they can be used as a first-pass
+    retrieval layer before injecting full IR examples into prompts.
+    """
+    blocks = ir.get("blocks", [])
+    networks = ir.get("networks", [])
+
+    component_counts: dict[str, int] = {}
+    for block in blocks:
+        block_id = str(block.get("id", "unknown"))
+        component_counts[block_id] = component_counts.get(block_id, 0) + 1
+
+    xs: list[int] = []
+    ys: list[int] = []
+    zs: list[int] = []
+    for block in blocks:
+        x, y, z = _block_pos(block)
+        xs.append(x)
+        ys.append(y)
+        zs.append(z)
+
+    if xs:
+        dimensions = {
+            "x": max(xs) - min(xs) + 1,
+            "y": max(ys) - min(ys) + 1,
+            "z": max(zs) - min(zs) + 1,
+        }
+    else:
+        dimensions = {"x": 0, "y": 0, "z": 0}
+
+    network_topology = {
+        "network_count": len(networks),
+        "largest_network_members": max((len(n.get("members", [])) for n in networks), default=0),
+        "output_count": len(ir.get("annotations", {}).get("outputs", [])),
+    }
+
+    su_values = [float(n.get("su", 0.0)) for n in networks if isinstance(n.get("su"), (int, float))]
+    su_production = sum(v for v in su_values if v > 0)
+    su_consumption = sum(abs(v) for v in su_values if v < 0)
+
+    stress_stats = {
+        "su_production": su_production,
+        "su_consumption": su_consumption,
+        "net_su": su_production - su_consumption,
+    }
+
+    tags: list[str] = []
+    volume = dimensions["x"] * dimensions["y"] * dimensions["z"]
+    total_blocks = len(blocks)
+
+    if volume and volume <= 125:
+        tags.append("compact")
+    if su_production >= 4096:
+        tags.append("high-SU")
+    if total_blocks and total_blocks <= 48:
+        tags.append("low-material")
+    if su_production > 0 and su_consumption > su_production:
+        tags.append("stress-deficit")
+
+    return {
+        "dimensions": dimensions,
+        "component_counts": dict(sorted(component_counts.items())),
+        "network_topology": network_topology,
+        "stress": stress_stats,
+        "tags": tags,
+    }
+
+
+def build_retrieval_corpus(examples: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Precompute summaries for each stored schematic/IR example."""
+    corpus: list[dict[str, Any]] = []
+    for example in examples:
+        record_id = str(example.get("id", f"example-{len(corpus)}"))
+        ir = dict(example.get("ir", {}))
+        summary = summarize_ir(ir)
+        corpus.append(
+            {
+                "id": record_id,
+                "summary": summary,
+                "ir": ir,
+            }
+        )
+    return corpus
+
+
+def _retrieval_score(summary: dict[str, Any], query: dict[str, Any]) -> float:
+    score = 0.0
+    required_tags = set(query.get("required_tags", []))
+    summary_tags = set(summary.get("tags", []))
+    score += 10.0 * len(required_tags.intersection(summary_tags))
+
+    target_su = query.get("target_su")
+    if isinstance(target_su, (int, float)):
+        delta = abs(float(target_su) - float(summary.get("stress", {}).get("su_production", 0.0)))
+        score += max(0.0, 5.0 - (delta / 1024.0))
+
+    max_dimensions = query.get("max_dimensions")
+    if isinstance(max_dimensions, dict):
+        dims = summary.get("dimensions", {})
+        fits = (
+            int(dims.get("x", 0)) <= int(max_dimensions.get("x", 0))
+            and int(dims.get("y", 0)) <= int(max_dimensions.get("y", 0))
+            and int(dims.get("z", 0)) <= int(max_dimensions.get("z", 0))
+        )
+        if fits:
+            score += 3.0
+
+    return score
+
+
+def retrieval_first_prompt_context(
+    query: dict[str, Any],
+    corpus: list[dict[str, Any]],
+    *,
+    top_k: int = 5,
+    include_full_ir: int = 1,
+) -> dict[str, Any]:
+    """Build prompt context with summaries first and selective full IR payloads.
+
+    This supports a retrieval-first strategy where most context budget is spent
+    on compact summaries and only the strongest matches include full examples.
+    """
+    ranked = sorted(
+        corpus,
+        key=lambda record: _retrieval_score(record.get("summary", {}), query),
+        reverse=True,
+    )
+    selected = ranked[: max(0, top_k)]
+
+    summaries = [{"id": rec["id"], "summary": rec["summary"]} for rec in selected]
+    full_ir_examples = [
+        {"id": rec["id"], "ir": rec["ir"]}
+        for rec in selected[: max(0, min(include_full_ir, len(selected)))]
+    ]
+
+    return {
+        "query": query,
+        "retrieved_summaries": summaries,
+        "full_ir_examples": full_ir_examples,
+    }
