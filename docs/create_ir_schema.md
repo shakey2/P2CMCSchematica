@@ -34,6 +34,23 @@ Top-level required keys:
    - `rpm_range.min <= rpm_range.max`
    - no duplicate block coordinates
    - `annotations.outputs[].target_network_id` must reference an existing `networks[].id`
+3. Create machine pass (`validate_create_machine`) emits structured diagnostics:
+   - bounding box vs `dimensions` constraint
+   - required orientation properties by block type
+   - mechanical network membership + connectivity consistency
+   - network stress/rpm checks against configured rule tables
+   - unsupported block/entity combinations
+
+Diagnostic shape:
+
+```json
+{
+  "code": "rpm.exceeds_block_limit",
+  "message": "Human-readable reason",
+  "block_pos": { "x": 0, "y": 64, "z": 0 },
+  "suggested_fix": "Actionable repair hint"
+}
+```
 
 Malformed AI output must be rejected before compilation.
 
