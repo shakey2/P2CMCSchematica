@@ -1,0 +1,57 @@
+{
+  "size": [5, 3, 2],
+  "palette": [
+    {"Name": "create:shaft", "Properties": {"axis": "x"}},
+    {"Name": "create:mechanical_belt", "Properties": {"part": "middle"}},
+    {"Name": "create:clutch", "Properties": {"axis": "z"}},
+    {"Name": "minecraft:barrel", "Properties": {"facing": "north"}}
+  ],
+  "blocks": [
+    {
+      "pos": [0, 0, 0],
+      "state": 0,
+      "nbt": {
+        "id": "create:kinetic_block_entity",
+        "Speed": 32.0,
+        "ForceAngle": 0.5,
+        "GeneratedSpeed": 16.0,
+        "IsGenerator": 1,
+        "DestroyMe": "drop_on_floor"
+      }
+    },
+    {
+      "pos": [1, 0, 0],
+      "state": 1,
+      "nbt": {
+        "id": "create:belt_block_entity",
+        "Length": 4,
+        "Controller": [1, 0, 0],
+        "Inventory": {"Slots": 2},
+        "Transient": true
+      }
+    },
+    {
+      "pos": [2, 0, 0],
+      "state": 2,
+      "nbt": {
+        "id": "create:kinetic_block_entity",
+        "Speed": -32.0,
+        "source": [0, 0, 0],
+        "network": 11,
+        "InternalMarker": "remove_me"
+      }
+    },
+    {
+      "pos": [4, 1, 1],
+      "state": 3,
+      "nbt": {
+        "id": "minecraft:barrel",
+        "Items": [],
+        "LootTable": "minecraft:chests/village/village_weaponsmith"
+      }
+    }
+  ],
+  "entities": [],
+  "DataVersion": 3700,
+  "author": "fixture"
+}
