@@ -3,6 +3,11 @@
 
 Usage:
   python tools/validate_create_ir.py path/to/ir.json
+
+Notes:
+  - Do not wrap the path in angle brackets when running in a shell.
+    ✅ python tools/validate_create_ir.py ./tmp_ir.json
+    ❌ python tools/validate_create_ir.py <tmp_ir.json>
 """
 
 from __future__ import annotations
@@ -374,6 +379,14 @@ def validate_ir_or_raise(ir: dict[str, Any]) -> None:
     if semantic_errors:
         raise IRValidationError("IR semantic validation failed:\n" + "\n".join(f"- {e}" for e in semantic_errors))
 
+
+def main() -> int:
+    if len(sys.argv) != 2:
+        print(
+            "Usage: python tools/validate_create_ir.py path/to/ir.json\n"
+            "Tip: do not include angle brackets around the path.",
+            file=sys.stderr,
+        )
     machine_diagnostics = validate_create_machine(ir)
     if machine_diagnostics:
         formatted = "\n".join(

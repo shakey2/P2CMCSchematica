@@ -60,6 +60,14 @@ Malformed AI output must be rejected before compilation.
 python tools/validate_create_ir.py path/to/ai-output.json
 ```
 
+Important shell note:
+
+- Use a real path and **do not** wrap it in angle brackets.
+- ✅ `python tools/validate_create_ir.py ./tmp_ir.json`
+- ❌ `python tools/validate_create_ir.py <temp_ir.json>`
+
+In Bash/Git Bash, `<...>` is treated as input redirection syntax, not a placeholder argument.
+
 - Exit code `0`: valid IR
 - Exit code `1`: invalid IR (reject; do not compile)
 - Exit code `2`: bad CLI usage
