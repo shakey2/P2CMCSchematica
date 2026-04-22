@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import sys
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
@@ -25,6 +26,69 @@ SCHEMA_PATH = Path(__file__).resolve().parents[1] / "schemas" / "create_ir.schem
 
 class IRValidationError(ValueError):
     """Raised when AI output is malformed and must be rejected."""
+
+
+@dataclass(frozen=True)
+class MachineDiagnostic:
+    code: str
+    message: str
+    block_pos: dict[str, int] | None
+    suggested_fix: str
+
+
+ORIENTATION_REQUIRED_BY_BLOCK: dict[str, set[str]] = {
+    "create:shaft": {"axis"},
+    "create:cogwheel": {"axis"},
+    "create:large_cogwheel": {"axis"},
+    "create:gearbox": {"axis"},
+    "create:clutch": {"axis"},
+    "create:gearshift": {"axis"},
+    "create:encased_chain_drive": {"axis"},
+}
+
+MECHANICAL_BLOCK_IDS: set[str] = {
+    "create:shaft",
+    "create:cogwheel",
+    "create:large_cogwheel",
+    "create:gearbox",
+    "create:clutch",
+    "create:gearshift",
+    "create:encased_chain_drive",
+    "create:mechanical_belt",
+}
+
+RPM_LIMITS_BY_BLOCK: dict[str, float] = {
+    "create:shaft": 256.0,
+    "create:cogwheel": 256.0,
+    "create:large_cogwheel": 128.0,
+    "create:gearbox": 128.0,
+    "create:clutch": 128.0,
+    "create:gearshift": 128.0,
+    "create:encased_chain_drive": 96.0,
+    "create:mechanical_belt": 64.0,
+}
+
+SU_LIMITS_BY_BLOCK: dict[str, float] = {
+    "create:shaft": 16384.0,
+    "create:cogwheel": 16384.0,
+    "create:large_cogwheel": 8192.0,
+    "create:gearbox": 4096.0,
+    "create:clutch": 4096.0,
+    "create:gearshift": 4096.0,
+    "create:encased_chain_drive": 2048.0,
+    "create:mechanical_belt": 1024.0,
+}
+
+SUPPORTED_ENTITY_BY_BLOCK: dict[str, set[str]] = {
+    "create:shaft": {"create:kinetic_block_entity"},
+    "create:cogwheel": {"create:kinetic_block_entity"},
+    "create:large_cogwheel": {"create:kinetic_block_entity"},
+    "create:gearbox": {"create:kinetic_block_entity"},
+    "create:clutch": {"create:kinetic_block_entity"},
+    "create:gearshift": {"create:kinetic_block_entity"},
+    "create:encased_chain_drive": {"create:kinetic_block_entity"},
+    "create:mechanical_belt": {"create:belt_block_entity"},
+}
 
 
 def _load_schema() -> dict[str, Any]:
@@ -68,6 +132,231 @@ def _check_semantics(ir: dict[str, Any]) -> list[str]:
     return errors
 
 
+def _matching_suffix_map(
+    rules: dict[str, Any], block_id: str
+) -> tuple[str, Any] | None:
+    for key, value in rules.items():
+        if block_id == key or block_id.endswith(key):
+            return key, value
+    return None
+
+
+def validate_create_machine(ir: dict[str, Any]) -> list[dict[str, Any]]:
+    """Run Create-specific semantic checks and return structured diagnostics."""
+    diagnostics: list[MachineDiagnostic] = []
+    blocks = ir.get("blocks", [])
+    networks = ir.get("networks", [])
+    constraints = ir.get("constraints", [])
+
+    block_by_pos: dict[tuple[int, int, int], dict[str, Any]] = {}
+    for block in blocks:
+        pos = block["pos"]
+        block_by_pos[(pos["x"], pos["y"], pos["z"])] = block
+
+    # Bounding box constraints from constraints[type=dimensions].
+    if blocks:
+        xs = [b["pos"]["x"] for b in blocks]
+        ys = [b["pos"]["y"] for b in blocks]
+        zs = [b["pos"]["z"] for b in blocks]
+        span = {
+            "x": max(xs) - min(xs) + 1,
+            "y": max(ys) - min(ys) + 1,
+            "z": max(zs) - min(zs) + 1,
+        }
+        for constraint in constraints:
+            if constraint.get("type") != "dimensions":
+                continue
+            max_dims = constraint["max"]
+            for axis in ("x", "y", "z"):
+                if span[axis] > max_dims[axis]:
+                    diagnostics.append(
+                        MachineDiagnostic(
+                            code="bbox.exceeds_constraint",
+                            message=(
+                                f"Machine span on {axis}-axis is {span[axis]}, "
+                                f"which exceeds allowed max {max_dims[axis]}."
+                            ),
+                            block_pos=None,
+                            suggested_fix=(
+                                f"Reduce machine extent on {axis}-axis to <= {max_dims[axis]} "
+                                "or relax the dimensions constraint."
+                            ),
+                        )
+                    )
+
+    # Per-block checks.
+    block_pos_to_network: dict[tuple[int, int, int], str] = {}
+    for network in networks:
+        network_id = network["id"]
+        for member in network["members"]:
+            pos_key = (member["x"], member["y"], member["z"])
+            if pos_key in block_pos_to_network and block_pos_to_network[pos_key] != network_id:
+                diagnostics.append(
+                    MachineDiagnostic(
+                        code="mechanical.member_in_multiple_networks",
+                        message=(
+                            f"Block position {pos_key} appears in networks "
+                            f"'{block_pos_to_network[pos_key]}' and '{network_id}'."
+                        ),
+                        block_pos={"x": pos_key[0], "y": pos_key[1], "z": pos_key[2]},
+                        suggested_fix="Ensure each mechanical block belongs to exactly one network.",
+                    )
+                )
+            block_pos_to_network[pos_key] = network_id
+            if pos_key not in block_by_pos:
+                diagnostics.append(
+                    MachineDiagnostic(
+                        code="mechanical.member_missing_block",
+                        message=f"Network '{network_id}' references missing block at {pos_key}.",
+                        block_pos={"x": pos_key[0], "y": pos_key[1], "z": pos_key[2]},
+                        suggested_fix="Add the missing block or remove this member from the network.",
+                    )
+                )
+
+    for block in blocks:
+        block_id = block["id"]
+        pos = block["pos"]
+        pos_key = (pos["x"], pos["y"], pos["z"])
+        props = block.get("properties", {})
+
+        orientation_rule = _matching_suffix_map(ORIENTATION_REQUIRED_BY_BLOCK, block_id)
+        if orientation_rule:
+            _, required_props = orientation_rule
+            missing = sorted(p for p in required_props if p not in props)
+            if missing:
+                diagnostics.append(
+                    MachineDiagnostic(
+                        code="orientation.missing_property",
+                        message=(
+                            f"Block '{block_id}' at {pos_key} is missing required orientation "
+                            f"properties: {', '.join(missing)}."
+                        ),
+                        block_pos=pos,
+                        suggested_fix=(
+                            "Set the required block-state orientation property/properties "
+                            "before compilation."
+                        ),
+                    )
+                )
+
+        if _matching_suffix_map({k: None for k in MECHANICAL_BLOCK_IDS}, block_id) and pos_key not in block_pos_to_network:
+            diagnostics.append(
+                MachineDiagnostic(
+                    code="mechanical.block_not_in_network",
+                    message=f"Mechanical block '{block_id}' at {pos_key} is not assigned to any network.",
+                    block_pos=pos,
+                    suggested_fix="Add this block position to the correct networks[].members list.",
+                )
+            )
+
+        entity_id = (
+            props.get("entity")
+            or props.get("entity_id")
+            or props.get("block_entity")
+            or props.get("block_entity_id")
+        )
+        if isinstance(entity_id, str):
+            entity_rule = _matching_suffix_map(SUPPORTED_ENTITY_BY_BLOCK, block_id)
+            if entity_rule:
+                _, supported_entities = entity_rule
+                if entity_id not in supported_entities:
+                    diagnostics.append(
+                        MachineDiagnostic(
+                            code="compat.unsupported_block_entity",
+                            message=(
+                                f"Block '{block_id}' at {pos_key} cannot use entity '{entity_id}'. "
+                                f"Supported: {sorted(supported_entities)}."
+                            ),
+                            block_pos=pos,
+                            suggested_fix="Use a supported block entity id for this block type.",
+                        )
+                    )
+
+    # Connectivity consistency and RPM/SU rules per network.
+    orthogonal_offsets = (
+        (1, 0, 0),
+        (-1, 0, 0),
+        (0, 1, 0),
+        (0, -1, 0),
+        (0, 0, 1),
+        (0, 0, -1),
+    )
+    for network in networks:
+        member_keys = {(m["x"], m["y"], m["z"]) for m in network["members"]}
+        if len(member_keys) > 1:
+            seed = next(iter(member_keys))
+            stack = [seed]
+            visited = set()
+            while stack:
+                current = stack.pop()
+                if current in visited:
+                    continue
+                visited.add(current)
+                for dx, dy, dz in orthogonal_offsets:
+                    nxt = (current[0] + dx, current[1] + dy, current[2] + dz)
+                    if nxt in member_keys and nxt not in visited:
+                        stack.append(nxt)
+            if visited != member_keys:
+                disconnected = sorted(member_keys - visited)
+                bad = disconnected[0]
+                diagnostics.append(
+                    MachineDiagnostic(
+                        code="mechanical.network_disconnected",
+                        message=(
+                            f"Network '{network['id']}' is mechanically disconnected; "
+                            f"example orphan member: {bad}."
+                        ),
+                        block_pos={"x": bad[0], "y": bad[1], "z": bad[2]},
+                        suggested_fix=(
+                            "Add bridging transmission components or split disconnected members "
+                            "into separate networks."
+                        ),
+                    )
+                )
+
+        if "rpm" in network:
+            rpm = float(network["rpm"])
+            for pos_key in member_keys:
+                block = block_by_pos.get(pos_key)
+                if not block:
+                    continue
+                rpm_rule = _matching_suffix_map(RPM_LIMITS_BY_BLOCK, block["id"])
+                if rpm_rule and abs(rpm) > rpm_rule[1]:
+                    diagnostics.append(
+                        MachineDiagnostic(
+                            code="rpm.exceeds_block_limit",
+                            message=(
+                                f"Network '{network['id']}' rpm {rpm} exceeds max {rpm_rule[1]} "
+                                f"for block '{block['id']}' at {pos_key}."
+                            ),
+                            block_pos={"x": pos_key[0], "y": pos_key[1], "z": pos_key[2]},
+                            suggested_fix="Lower network rpm or redesign transmission to meet per-block limits.",
+                        )
+                    )
+
+        if "su" in network:
+            su = float(network["su"])
+            for pos_key in member_keys:
+                block = block_by_pos.get(pos_key)
+                if not block:
+                    continue
+                su_rule = _matching_suffix_map(SU_LIMITS_BY_BLOCK, block["id"])
+                if su_rule and abs(su) > su_rule[1]:
+                    diagnostics.append(
+                        MachineDiagnostic(
+                            code="stress.exceeds_block_limit",
+                            message=(
+                                f"Network '{network['id']}' stress {su} exceeds max {su_rule[1]} "
+                                f"for block '{block['id']}' at {pos_key}."
+                            ),
+                            block_pos={"x": pos_key[0], "y": pos_key[1], "z": pos_key[2]},
+                            suggested_fix="Lower stress demand or increase capacity before this component.",
+                        )
+                    )
+
+    return [asdict(diagnostic) for diagnostic in diagnostics]
+
+
 def validate_ir_or_raise(ir: dict[str, Any]) -> None:
     """Reject malformed AI output before compilation."""
     schema = _load_schema()
@@ -84,6 +373,16 @@ def validate_ir_or_raise(ir: dict[str, Any]) -> None:
     semantic_errors = _check_semantics(ir)
     if semantic_errors:
         raise IRValidationError("IR semantic validation failed:\n" + "\n".join(f"- {e}" for e in semantic_errors))
+
+    machine_diagnostics = validate_create_machine(ir)
+    if machine_diagnostics:
+        formatted = "\n".join(
+            "- "
+            + f"[{diag['code']}] {diag['message']} "
+            + f"(block_pos={diag['block_pos']}, suggested_fix={diag['suggested_fix']})"
+            for diag in machine_diagnostics
+        )
+        raise IRValidationError("Create machine validation failed:\n" + formatted)
 
 
 def main() -> int:
