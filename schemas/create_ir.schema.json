@@ -1,0 +1,300 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://p2cmcschematica.local/schemas/create-ir.schema.json",
+  "title": "Create Schematic IR",
+  "type": "object",
+  "required": [
+    "blocks",
+    "networks",
+    "constraints",
+    "annotations"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "blocks": {
+      "type": "array",
+      "description": "All blocks emitted by planning/AI before compilation.",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": [
+          "pos",
+          "id",
+          "properties"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "pos": {
+            "type": "object",
+            "required": [
+              "x",
+              "y",
+              "z"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "x": {
+                "type": "integer"
+              },
+              "y": {
+                "type": "integer"
+              },
+              "z": {
+                "type": "integer"
+              }
+            }
+          },
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "^[a-z0-9_:\\-/]+$"
+          },
+          "properties": {
+            "type": "object",
+            "description": "Block state properties for Create/Minecraft blocks.",
+            "additionalProperties": {
+              "type": [
+                "string",
+                "number",
+                "integer",
+                "boolean"
+              ]
+            }
+          }
+        }
+      }
+    },
+    "networks": {
+      "type": "array",
+      "description": "Kinetic connectivity groups and topology.",
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "members"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9_.-]+$"
+          },
+          "members": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "$ref": "#/$defs/position"
+            }
+          },
+          "rpm": {
+            "type": "number",
+            "description": "Optional solved or expected RPM for this network."
+          },
+          "su": {
+            "type": "number",
+            "description": "Optional solved or expected Stress Unit load/capacity for this network."
+          }
+        }
+      }
+    },
+    "constraints": {
+      "type": "array",
+      "description": "User goals and hard limits from prompt/UI.",
+      "items": {
+        "oneOf": [
+          {
+            "$ref": "#/$defs/dimensionsConstraint"
+          },
+          {
+            "$ref": "#/$defs/suTargetConstraint"
+          },
+          {
+            "$ref": "#/$defs/rpmRangeConstraint"
+          },
+          {
+            "$ref": "#/$defs/allowedBlocksConstraint"
+          }
+        ]
+      }
+    },
+    "annotations": {
+      "type": "object",
+      "description": "Intent metadata to help deterministic compilers and explainability.",
+      "required": [
+        "generator_core",
+        "transmission_path",
+        "outputs"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "generator_core": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/position"
+          }
+        },
+        "transmission_path": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/position"
+          }
+        },
+        "outputs": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "required": [
+              "name",
+              "target_network_id",
+              "pos"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "name": {
+                "type": "string",
+                "minLength": 1
+              },
+              "target_network_id": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9_.-]+$"
+              },
+              "pos": {
+                "$ref": "#/$defs/position"
+              }
+            }
+          }
+        },
+        "notes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "position": {
+      "type": "object",
+      "required": [
+        "x",
+        "y",
+        "z"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "x": {
+          "type": "integer"
+        },
+        "y": {
+          "type": "integer"
+        },
+        "z": {
+          "type": "integer"
+        }
+      }
+    },
+    "dimensionsConstraint": {
+      "type": "object",
+      "required": [
+        "type",
+        "max"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "const": "dimensions"
+        },
+        "max": {
+          "type": "object",
+          "required": [
+            "x",
+            "y",
+            "z"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "x": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "y": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "z": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        }
+      }
+    },
+    "suTargetConstraint": {
+      "type": "object",
+      "required": [
+        "type",
+        "target"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "const": "su_target"
+        },
+        "target": {
+          "type": "number",
+          "minimum": 0
+        }
+      }
+    },
+    "rpmRangeConstraint": {
+      "type": "object",
+      "required": [
+        "type",
+        "min",
+        "max"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "const": "rpm_range"
+        },
+        "min": {
+          "type": "number"
+        },
+        "max": {
+          "type": "number"
+        },
+        "network_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_.-]+$"
+        }
+      }
+    },
+    "allowedBlocksConstraint": {
+      "type": "object",
+      "required": [
+        "type",
+        "ids"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "const": "allowed_blocks"
+        },
+        "ids": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "pattern": "^[a-z0-9_:\\-/]+$"
+          },
+          "uniqueItems": true
+        }
+      }
+    }
+  }
+}
