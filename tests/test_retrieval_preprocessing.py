@@ -68,3 +68,36 @@ def test_retrieval_first_context_prefers_summary_and_selective_full_ir() -> None
     assert [rec["id"] for rec in context["retrieved_summaries"]] == ["compact_high", "large_low"]
     assert [rec["id"] for rec in context["full_ir_examples"]] == ["compact_high"]
     assert "summary" in context["retrieved_summaries"][0]
+    assert "retrieval_trace" in context["retrieved_summaries"][0]
+
+
+def test_planner_pipeline_builds_debug_trace() -> None:
+    examples = [
+        {"id": "compact_high", "ir": _example_ir(su=6000, block_count=16, size=4)},
+        {"id": "large_low", "ir": _example_ir(su=512, block_count=256, size=16)},
+    ]
+
+    planned = pipeline.build_planner_prompt_context(
+        {
+            "intent": {
+                "size": {"x": 8, "y": 6, "z": 8},
+                "su": 5000,
+                "compactness": "compact",
+                "exploit_tolerance": "safe",
+            },
+            "environment": {
+                "loader": "forge",
+                "minecraft_version": "1.20.1",
+                "create_version": "0.5.1f",
+            },
+        },
+        examples,
+        top_k=2,
+        include_full_ir=1,
+    )
+
+    assert planned["parsed_intent"]["required_tags"] == ["compact", "high-SU"]
+    assert "vanilla_mechanics" in planned["selected_rules"]
+    assert planned["planner_trace"]["why_this_rule"]
+    assert planned["planner_trace"]["why_this_example"]
+    assert planned["planner_trace"]["why_this_example"][0]["id"] == "compact_high"
