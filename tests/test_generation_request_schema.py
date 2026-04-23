@@ -34,3 +34,15 @@ def test_generation_request_schema_defines_policy_and_performance_shape() -> Non
 
     requested_features = props["requested_features"]
     assert set(requested_features["properties"]) == {"block_chain", "target_su"}
+    assert (
+        requested_features["properties"]["block_chain"]["items"]["pattern"]
+        == "^(minecraft|create):[a-z0-9_./-]+$"
+    )
+
+
+def test_generation_request_schema_keeps_additional_mods_stub_shape() -> None:
+    schema = _load_schema()
+    additional_mods = schema["properties"]["additional_mods"]
+
+    assert additional_mods["type"] == "array"
+    assert additional_mods["items"]["required"] == ["id", "version"]

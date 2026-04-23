@@ -452,6 +452,17 @@ def build_planner_prompt_context(
     """Planner pipeline for intent->rules->retrieval->focused prompt package."""
     parsed_intent = parse_user_intent(dict(request.get("intent", {})))
     env = dict(request.get("environment", {}))
+    warnings: list[dict[str, str]] = []
+    additional_mods = request.get("additional_mods")
+    if additional_mods is None and isinstance(env, dict):
+        additional_mods = env.get("additional_mods")
+    if isinstance(additional_mods, list) and additional_mods:
+        warnings.append(
+            {
+                "code": "ADDITIONAL_MODS_STUBBED",
+                "message": "additional_mods is currently ignored by planner rule-selection.",
+            }
+        )
     rule_pack = load_rule_pack(
         str(env.get("loader", "")),
         str(env.get("minecraft_version", "")),
@@ -495,4 +506,5 @@ def build_planner_prompt_context(
             "why_this_rule": rule_trace,
             "why_this_example": example_trace,
         },
+        "warnings": warnings,
     }

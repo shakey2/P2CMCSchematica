@@ -42,6 +42,7 @@ SCHEMA_PATH = Path(__file__).resolve().parents[1] / "schemas" / "create_ir.schem
 REQUEST_SCHEMA_PATH = (
     Path(__file__).resolve().parents[1] / "schemas" / "generation_request.schema.json"
 )
+ALLOWED_BLOCK_NAMESPACES: set[str] = {"minecraft", "create"}
 
 
 class IRValidationError(ValueError):
@@ -163,6 +164,22 @@ def validate_generation_request_or_raise(request: dict[str, Any]) -> None:
             "Generation request validation failed:\n"
             f"- installed_mods: ambiguous mod fingerprint for ids [{ids}]"
         )
+
+    requested_features = request.get("requested_features")
+    if isinstance(requested_features, dict):
+        block_chain = requested_features.get("block_chain", [])
+        if isinstance(block_chain, list):
+            for idx, block_id in enumerate(block_chain):
+                if not isinstance(block_id, str):
+                    continue
+                namespace = block_id.split(":", 1)[0].strip().lower()
+                if namespace not in ALLOWED_BLOCK_NAMESPACES:
+                    raise IRValidationError(
+                        "Generation request validation failed:\n"
+                        f"- requested_features.block_chain[{idx}]: "
+                        "UNSUPPORTED_MOD_NAMESPACE "
+                        f"(got '{namespace}', allowed: create, minecraft)"
+                    )
 
     loader = str(request.get("loader", ""))
     minecraft_version = str(request.get("minecraft_version", ""))
