@@ -31,3 +31,6 @@ def test_generation_request_schema_defines_policy_and_performance_shape() -> Non
     perf = props["performance_constraints"]
     assert set(perf["required"]) == {"tps_safe", "entity_caps"}
     assert perf["properties"]["entity_caps"]["required"] == ["max_total"]
+
+    requested_features = props["requested_features"]
+    assert set(requested_features["properties"]) == {"block_chain", "target_su"}

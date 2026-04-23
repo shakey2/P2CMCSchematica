@@ -22,7 +22,13 @@ TOOLS_DIR = Path(__file__).resolve().parent
 if str(TOOLS_DIR) not in sys.path:
     sys.path.insert(0, str(TOOLS_DIR))
 
-from rule_pack import RulePackError, load_rule_pack, machine_rule_views
+from rule_pack import (
+    RulePackError,
+    build_capability_index,
+    load_rule_pack,
+    machine_rule_views,
+    nearest_create_version,
+)
 
 try:
     import jsonschema
@@ -158,14 +164,72 @@ def validate_generation_request_or_raise(request: dict[str, Any]) -> None:
             f"- installed_mods: ambiguous mod fingerprint for ids [{ids}]"
         )
 
+    loader = str(request.get("loader", ""))
+    minecraft_version = str(request.get("minecraft_version", ""))
+    create_version = str(request.get("create_version", ""))
     try:
-        load_rule_pack(
+        rule_pack = load_rule_pack(loader, minecraft_version, create_version)
+    except RulePackError as exc:
+        suggestion = {
+            "nearest_compatible_create_version": nearest_create_version(
+                loader, minecraft_version, create_version
+            ),
+            "capability_index": build_capability_index(),
+        }
+        raise IRValidationError(
+            "Generation request validation failed:\n"
+            f"- rules: {exc}\n"
+            f"- fallback_suggestions: {json.dumps(suggestion, sort_keys=True)}"
+        ) from exc
+
+    fallback_suggestions = _compute_feature_fallback_suggestions(request, rule_pack)
+    if fallback_suggestions:
+        raise IRValidationError(
+            "Generation request validation failed:\n"
+            "- requested_features: unsupported by current environment capability index\n"
+            f"- fallback_suggestions: {json.dumps(fallback_suggestions, sort_keys=True)}"
+        )
+
+
+def _compute_feature_fallback_suggestions(
+    request: dict[str, Any], rule_pack: dict[str, Any]
+) -> dict[str, Any] | None:
+    requested_features = request.get("requested_features")
+    if not isinstance(requested_features, dict):
+        return None
+
+    block_chain = requested_features.get("block_chain", [])
+    target_su = requested_features.get("target_su")
+    if not isinstance(block_chain, list):
+        block_chain = []
+
+    supported_blocks = sorted(rule_pack.get("supported_blocks", {}).keys())
+    unsupported_blocks = [b for b in block_chain if b not in supported_blocks]
+    fallback_chain = [b for b in block_chain if b in supported_blocks]
+    if not fallback_chain:
+        fallback_chain = supported_blocks[: min(3, len(supported_blocks))]
+
+    max_supported_su = max(
+        (float(v) for v in rule_pack["kinetic_rules"].get("stress_limits_by_block", {}).values()),
+        default=0.0,
+    )
+    reduced_target_su = None
+    if isinstance(target_su, (int, float)) and float(target_su) > max_supported_su:
+        reduced_target_su = max_supported_su
+
+    if not unsupported_blocks and reduced_target_su is None:
+        return None
+
+    return {
+        "nearest_compatible_create_version": nearest_create_version(
             str(request.get("loader", "")),
             str(request.get("minecraft_version", "")),
             str(request.get("create_version", "")),
-        )
-    except RulePackError as exc:
-        raise IRValidationError(f"Generation request validation failed:\n- rules: {exc}") from exc
+        ),
+        "alternative_block_chain": fallback_chain,
+        "reduced_target_su": reduced_target_su,
+        "unsupported_blocks": unsupported_blocks,
+    }
 
 
 def _check_semantics(ir: dict[str, Any]) -> list[str]:

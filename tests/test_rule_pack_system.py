@@ -71,3 +71,28 @@ def test_banned_pattern_diagnostic_comes_from_rule_pack() -> None:
     diagnostics = validator.validate_create_machine(ir, pack)
 
     assert any(d["code"] == "banned.mixed_axis_gearbox_ladder" for d in diagnostics)
+
+
+def test_generation_request_returns_machine_readable_fallback_suggestions() -> None:
+    request = {
+        "fingerprint": "abc123",
+        "loader": "forge",
+        "minecraft_version": "1.20.1",
+        "create_version": "0.5.1f",
+        "installed_mods": [{"id": "create", "version": "0.5.1f"}],
+        "mechanic_policy": "safe",
+        "performance_constraints": {"tps_safe": True, "entity_caps": {"max_total": 64}},
+        "requested_features": {
+            "block_chain": ["create:shaft", "create:nonexistent_block"],
+            "target_su": 20000,
+        },
+    }
+
+    try:
+        validator.validate_generation_request_or_raise(request)
+        raise AssertionError("Expected unsupported requested_features to fail validation.")
+    except validator.IRValidationError as exc:
+        text = str(exc)
+        assert "fallback_suggestions" in text
+        assert "alternative_block_chain" in text
+        assert "reduced_target_su" in text
