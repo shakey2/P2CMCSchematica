@@ -75,6 +75,15 @@ all compatibility/performance fields:
 - `fingerprint` is missing or blank
 - `installed_mods` contains duplicate IDs
 - any mod version is ambiguous (`*`, `latest`, `any`, `unknown`)
+- `requested_features.block_chain` references unsupported blocks for the selected environment
+- `requested_features.target_su` exceeds environment limits
+
+When a capability mismatch is detected, the validator includes machine-readable
+`fallback_suggestions` in the error text with:
+
+- `nearest_compatible_create_version`
+- `alternative_block_chain`
+- `reduced_target_su`
 
 ## Usage
 

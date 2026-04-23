@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+from difflib import get_close_matches
 from pathlib import Path
 from typing import Any
 
@@ -87,6 +88,36 @@ def load_rule_pack(loader: str, minecraft_version: str, create_version: str) -> 
 
     validate_rule_pack_shape(payload)
     return payload
+
+
+def build_capability_index() -> dict[str, dict[str, list[str]]]:
+    """Return available (loader -> minecraft_version -> [create_versions]) tuples."""
+    index: dict[str, dict[str, list[str]]] = {}
+    if not RULES_ROOT.exists():
+        return index
+
+    for loader_dir in sorted(p for p in RULES_ROOT.iterdir() if p.is_dir()):
+        loader_key = loader_dir.name
+        index.setdefault(loader_key, {})
+        for mc_dir in sorted(p for p in loader_dir.iterdir() if p.is_dir()):
+            create_versions = sorted(p.stem for p in mc_dir.glob("*.json") if p.is_file())
+            if create_versions:
+                index[loader_key][mc_dir.name] = create_versions
+    return index
+
+
+def nearest_create_version(
+    loader: str, minecraft_version: str, requested_create_version: str
+) -> str | None:
+    """Pick the closest available Create version for a loader+minecraft tuple."""
+    index = build_capability_index()
+    create_versions = index.get(loader, {}).get(minecraft_version, [])
+    if not create_versions:
+        return None
+    if requested_create_version in create_versions:
+        return requested_create_version
+    match = get_close_matches(requested_create_version, create_versions, n=1, cutoff=0.0)
+    return match[0] if match else create_versions[-1]
 
 
 def machine_rule_views(rule_pack: dict[str, Any]) -> dict[str, Any]:
