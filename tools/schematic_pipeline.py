@@ -6,7 +6,15 @@ The decompiled representation is JSON-friendly and stable for round-trips.
 
 from __future__ import annotations
 
+import sys
+from pathlib import Path
 from typing import Any
+
+TOOLS_DIR = Path(__file__).resolve().parent
+if str(TOOLS_DIR) not in sys.path:
+    sys.path.insert(0, str(TOOLS_DIR))
+
+from rule_pack import load_rule_pack
 
 CREATE_BLOCK_ENTITY_FIELD_WHITELIST: dict[str, set[str]] = {
     "create:kinetic_block_entity": {
@@ -282,6 +290,39 @@ def _retrieval_score(summary: dict[str, Any], query: dict[str, Any]) -> float:
     return score
 
 
+def _retrieval_reason(summary: dict[str, Any], query: dict[str, Any]) -> dict[str, Any]:
+    """Explain why an example matched a retrieval query."""
+    reasons: list[str] = []
+    required_tags = set(query.get("required_tags", []))
+    summary_tags = set(summary.get("tags", []))
+    matched_tags = sorted(required_tags.intersection(summary_tags))
+    if matched_tags:
+        reasons.append(f"matched tags: {', '.join(matched_tags)}")
+
+    target_su = query.get("target_su")
+    if isinstance(target_su, (int, float)):
+        produced = float(summary.get("stress", {}).get("su_production", 0.0))
+        reasons.append(f"su delta={abs(float(target_su) - produced):.1f}")
+
+    max_dimensions = query.get("max_dimensions")
+    if isinstance(max_dimensions, dict):
+        dims = summary.get("dimensions", {})
+        fits = (
+            int(dims.get("x", 0)) <= int(max_dimensions.get("x", 0))
+            and int(dims.get("y", 0)) <= int(max_dimensions.get("y", 0))
+            and int(dims.get("z", 0)) <= int(max_dimensions.get("z", 0))
+        )
+        reasons.append("fits size bound" if fits else "exceeds size bound")
+
+    if not reasons:
+        reasons.append("general similarity")
+
+    return {
+        "score": _retrieval_score(summary, query),
+        "why_this_example": reasons,
+    }
+
+
 def retrieval_first_prompt_context(
     query: dict[str, Any],
     corpus: list[dict[str, Any]],
@@ -301,7 +342,14 @@ def retrieval_first_prompt_context(
     )
     selected = ranked[: max(0, top_k)]
 
-    summaries = [{"id": rec["id"], "summary": rec["summary"]} for rec in selected]
+    summaries = [
+        {
+            "id": rec["id"],
+            "summary": rec["summary"],
+            "retrieval_trace": _retrieval_reason(rec.get("summary", {}), query),
+        }
+        for rec in selected
+    ]
     full_ir_examples = [
         {"id": rec["id"], "ir": rec["ir"]}
         for rec in selected[: max(0, min(include_full_ir, len(selected)))]
@@ -311,4 +359,140 @@ def retrieval_first_prompt_context(
         "query": query,
         "retrieved_summaries": summaries,
         "full_ir_examples": full_ir_examples,
+    }
+
+
+def parse_user_intent(intent: dict[str, Any]) -> dict[str, Any]:
+    """Normalize user intent into retrieval and policy fields for planning."""
+    size = intent.get("size", {})
+    compactness = str(intent.get("compactness", "balanced")).strip().lower()
+    exploit_tolerance = str(intent.get("exploit_tolerance", "safe")).strip().lower()
+
+    normalized = {
+        "target_su": float(intent.get("su", 0.0)) if isinstance(intent.get("su"), (int, float)) else 0.0,
+        "max_dimensions": {
+            "x": int(size.get("x", 0)) if isinstance(size, dict) else 0,
+            "y": int(size.get("y", 0)) if isinstance(size, dict) else 0,
+            "z": int(size.get("z", 0)) if isinstance(size, dict) else 0,
+        },
+        "compactness": compactness,
+        "exploit_tolerance": exploit_tolerance,
+        "required_tags": [],
+    }
+
+    if compactness in {"compact", "high", "strict"}:
+        normalized["required_tags"].append("compact")
+    if normalized["target_su"] >= 4096:
+        normalized["required_tags"].append("high-SU")
+    return normalized
+
+
+def select_relevant_mechanic_sections(
+    rule_pack: dict[str, Any], parsed_intent: dict[str, Any]
+) -> tuple[dict[str, Any], list[dict[str, str]]]:
+    """Select rule-pack slices used to guide planning and generation."""
+    policy = parsed_intent.get("exploit_tolerance", "safe")
+    selected: dict[str, Any] = {
+        "supported_blocks": rule_pack.get("supported_blocks", {}),
+        "kinetic_rules": {
+            "rpm_limits_by_block": rule_pack.get("kinetic_rules", {}).get("rpm_limits_by_block", {}),
+            "stress_limits_by_block": rule_pack.get("kinetic_rules", {}).get(
+                "stress_limits_by_block", {}
+            ),
+            "connectivity": rule_pack.get("kinetic_rules", {}).get("connectivity", {}),
+        },
+    }
+    trace: list[dict[str, str]] = [
+        {
+            "section": "kinetic_rules.rpm_limits_by_block",
+            "why_this_rule": "SU planning needs per-block RPM ceilings.",
+        },
+        {
+            "section": "kinetic_rules.stress_limits_by_block",
+            "why_this_rule": "SU planning needs stress-unit caps by block.",
+        },
+    ]
+
+    if policy == "safe":
+        selected["vanilla_mechanics"] = rule_pack.get("vanilla_mechanics", {})
+        selected["incompatibilities"] = rule_pack.get("incompatibilities", {})
+        trace.extend(
+            [
+                {
+                    "section": "vanilla_mechanics",
+                    "why_this_rule": "Safe policy enforces vanilla interaction behavior.",
+                },
+                {
+                    "section": "incompatibilities",
+                    "why_this_rule": "Safe policy avoids known unstable patterns.",
+                },
+            ]
+        )
+    elif policy == "quirks":
+        selected["incompatibilities"] = {
+            "banned_patterns": rule_pack.get("incompatibilities", {}).get("banned_patterns", [])
+        }
+        trace.append(
+            {
+                "section": "incompatibilities.banned_patterns",
+                "why_this_rule": "Quirks policy allows edge cases but keeps hard bans.",
+            }
+        )
+
+    return selected, trace
+
+
+def build_planner_prompt_context(
+    request: dict[str, Any],
+    examples: list[dict[str, Any]],
+    *,
+    top_k: int = 5,
+    include_full_ir: int = 1,
+) -> dict[str, Any]:
+    """Planner pipeline for intent->rules->retrieval->focused prompt package."""
+    parsed_intent = parse_user_intent(dict(request.get("intent", {})))
+    env = dict(request.get("environment", {}))
+    rule_pack = load_rule_pack(
+        str(env.get("loader", "")),
+        str(env.get("minecraft_version", "")),
+        str(env.get("create_version", "")),
+    )
+    selected_rules, rule_trace = select_relevant_mechanic_sections(rule_pack, parsed_intent)
+
+    corpus = build_retrieval_corpus(examples)
+    retrieval_context = retrieval_first_prompt_context(
+        {
+            "required_tags": parsed_intent.get("required_tags", []),
+            "target_su": parsed_intent.get("target_su", 0.0),
+            "max_dimensions": parsed_intent.get("max_dimensions", {}),
+        },
+        corpus,
+        top_k=top_k,
+        include_full_ir=include_full_ir,
+    )
+
+    example_trace = [
+        {
+            "id": rec["id"],
+            "why_this_example": rec.get("retrieval_trace", {}).get("why_this_example", []),
+            "score": rec.get("retrieval_trace", {}).get("score", 0.0),
+        }
+        for rec in retrieval_context.get("retrieved_summaries", [])
+    ]
+
+    return {
+        "parsed_intent": parsed_intent,
+        "environment": env,
+        "selected_rules": selected_rules,
+        "retrieval": retrieval_context,
+        "prompt_package": {
+            "intent": parsed_intent,
+            "rules": selected_rules,
+            "retrieved_summaries": retrieval_context.get("retrieved_summaries", []),
+            "full_ir_examples": retrieval_context.get("full_ir_examples", []),
+        },
+        "planner_trace": {
+            "why_this_rule": rule_trace,
+            "why_this_example": example_trace,
+        },
     }
