@@ -8,7 +8,8 @@ from difflib import get_close_matches
 from pathlib import Path
 from typing import Any
 
-RULES_ROOT = Path(__file__).resolve().parents[1] / "rules"
+CAPABILITIES_ROOT = Path(__file__).resolve().parents[1] / "capabilities"
+LEGACY_RULES_ROOT = Path(__file__).resolve().parents[1] / "rules"
 
 
 class RulePackError(ValueError):
@@ -17,7 +18,10 @@ class RulePackError(ValueError):
 
 def rule_pack_path(loader: str, minecraft_version: str, create_version: str) -> Path:
     """Return canonical rule-pack path for a version tuple."""
-    return RULES_ROOT / loader / minecraft_version / f"{create_version}.json"
+    preferred_path = CAPABILITIES_ROOT / loader / minecraft_version / f"{create_version}.json"
+    if preferred_path.exists():
+        return preferred_path
+    return LEGACY_RULES_ROOT / loader / minecraft_version / f"{create_version}.json"
 
 
 def _require_dict(value: Any, *, field_name: str) -> dict[str, Any]:
@@ -93,16 +97,20 @@ def load_rule_pack(loader: str, minecraft_version: str, create_version: str) -> 
 def build_capability_index() -> dict[str, dict[str, list[str]]]:
     """Return available (loader -> minecraft_version -> [create_versions]) tuples."""
     index: dict[str, dict[str, list[str]]] = {}
-    if not RULES_ROOT.exists():
-        return index
+    for root in (CAPABILITIES_ROOT, LEGACY_RULES_ROOT):
+        if not root.exists():
+            continue
 
-    for loader_dir in sorted(p for p in RULES_ROOT.iterdir() if p.is_dir()):
-        loader_key = loader_dir.name
-        index.setdefault(loader_key, {})
-        for mc_dir in sorted(p for p in loader_dir.iterdir() if p.is_dir()):
-            create_versions = sorted(p.stem for p in mc_dir.glob("*.json") if p.is_file())
-            if create_versions:
-                index[loader_key][mc_dir.name] = create_versions
+        for loader_dir in sorted(p for p in root.iterdir() if p.is_dir()):
+            loader_key = loader_dir.name
+            index.setdefault(loader_key, {})
+            for mc_dir in sorted(p for p in loader_dir.iterdir() if p.is_dir()):
+                existing = set(index[loader_key].get(mc_dir.name, []))
+                discovered = {p.stem for p in mc_dir.glob("*.json") if p.is_file()}
+                merged = sorted(existing | discovered)
+                if merged:
+                    index[loader_key][mc_dir.name] = merged
+
     return index
 
 
