@@ -18,6 +18,12 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
+TOOLS_DIR = Path(__file__).resolve().parent
+if str(TOOLS_DIR) not in sys.path:
+    sys.path.insert(0, str(TOOLS_DIR))
+
+from rule_pack import RulePackError, load_rule_pack, machine_rule_views
+
 try:
     import jsonschema
 except ImportError as exc:  # pragma: no cover
@@ -44,7 +50,7 @@ class MachineDiagnostic:
     suggested_fix: str
 
 
-ORIENTATION_REQUIRED_BY_BLOCK: dict[str, set[str]] = {
+DEFAULT_ORIENTATION_REQUIRED_BY_BLOCK: dict[str, set[str]] = {
     "create:shaft": {"axis"},
     "create:cogwheel": {"axis"},
     "create:large_cogwheel": {"axis"},
@@ -54,7 +60,7 @@ ORIENTATION_REQUIRED_BY_BLOCK: dict[str, set[str]] = {
     "create:encased_chain_drive": {"axis"},
 }
 
-MECHANICAL_BLOCK_IDS: set[str] = {
+DEFAULT_MECHANICAL_BLOCK_IDS: set[str] = {
     "create:shaft",
     "create:cogwheel",
     "create:large_cogwheel",
@@ -65,7 +71,7 @@ MECHANICAL_BLOCK_IDS: set[str] = {
     "create:mechanical_belt",
 }
 
-RPM_LIMITS_BY_BLOCK: dict[str, float] = {
+DEFAULT_RPM_LIMITS_BY_BLOCK: dict[str, float] = {
     "create:shaft": 256.0,
     "create:cogwheel": 256.0,
     "create:large_cogwheel": 128.0,
@@ -76,7 +82,7 @@ RPM_LIMITS_BY_BLOCK: dict[str, float] = {
     "create:mechanical_belt": 64.0,
 }
 
-SU_LIMITS_BY_BLOCK: dict[str, float] = {
+DEFAULT_SU_LIMITS_BY_BLOCK: dict[str, float] = {
     "create:shaft": 16384.0,
     "create:cogwheel": 16384.0,
     "create:large_cogwheel": 8192.0,
@@ -87,7 +93,7 @@ SU_LIMITS_BY_BLOCK: dict[str, float] = {
     "create:mechanical_belt": 1024.0,
 }
 
-SUPPORTED_ENTITY_BY_BLOCK: dict[str, set[str]] = {
+DEFAULT_SUPPORTED_ENTITY_BY_BLOCK: dict[str, set[str]] = {
     "create:shaft": {"create:kinetic_block_entity"},
     "create:cogwheel": {"create:kinetic_block_entity"},
     "create:large_cogwheel": {"create:kinetic_block_entity"},
@@ -152,6 +158,15 @@ def validate_generation_request_or_raise(request: dict[str, Any]) -> None:
             f"- installed_mods: ambiguous mod fingerprint for ids [{ids}]"
         )
 
+    try:
+        load_rule_pack(
+            str(request.get("loader", "")),
+            str(request.get("minecraft_version", "")),
+            str(request.get("create_version", "")),
+        )
+    except RulePackError as exc:
+        raise IRValidationError(f"Generation request validation failed:\n- rules: {exc}") from exc
+
 
 def _check_semantics(ir: dict[str, Any]) -> list[str]:
     """Additional checks that are harder to encode in portable JSON schema."""
@@ -198,8 +213,33 @@ def _matching_suffix_map(
     return None
 
 
-def validate_create_machine(ir: dict[str, Any]) -> list[dict[str, Any]]:
+def _resolve_machine_rules(rule_pack: dict[str, Any] | None) -> dict[str, Any]:
+    if rule_pack is None:
+        return {
+            "mechanical_block_ids": DEFAULT_MECHANICAL_BLOCK_IDS,
+            "orientation_required_by_block": DEFAULT_ORIENTATION_REQUIRED_BY_BLOCK,
+            "rpm_limits_by_block": DEFAULT_RPM_LIMITS_BY_BLOCK,
+            "stress_limits_by_block": DEFAULT_SU_LIMITS_BY_BLOCK,
+            "supported_entity_by_block": DEFAULT_SUPPORTED_ENTITY_BY_BLOCK,
+            "connectivity_required": True,
+            "banned_patterns": [],
+        }
+    return machine_rule_views(rule_pack)
+
+
+def validate_create_machine(
+    ir: dict[str, Any], rule_pack: dict[str, Any] | None = None
+) -> list[dict[str, Any]]:
     """Run Create-specific semantic checks and return structured diagnostics."""
+    machine_rules = _resolve_machine_rules(rule_pack)
+    orientation_required_by_block = machine_rules["orientation_required_by_block"]
+    mechanical_block_ids = machine_rules["mechanical_block_ids"]
+    rpm_limits_by_block = machine_rules["rpm_limits_by_block"]
+    stress_limits_by_block = machine_rules["stress_limits_by_block"]
+    supported_entity_by_block = machine_rules["supported_entity_by_block"]
+    connectivity_required = machine_rules["connectivity_required"]
+    banned_patterns = machine_rules["banned_patterns"]
+
     diagnostics: list[MachineDiagnostic] = []
     blocks = ir.get("blocks", [])
     networks = ir.get("networks", [])
@@ -276,7 +316,7 @@ def validate_create_machine(ir: dict[str, Any]) -> list[dict[str, Any]]:
         pos_key = (pos["x"], pos["y"], pos["z"])
         props = block.get("properties", {})
 
-        orientation_rule = _matching_suffix_map(ORIENTATION_REQUIRED_BY_BLOCK, block_id)
+        orientation_rule = _matching_suffix_map(orientation_required_by_block, block_id)
         if orientation_rule:
             _, required_props = orientation_rule
             missing = sorted(p for p in required_props if p not in props)
@@ -296,7 +336,7 @@ def validate_create_machine(ir: dict[str, Any]) -> list[dict[str, Any]]:
                     )
                 )
 
-        if _matching_suffix_map({k: None for k in MECHANICAL_BLOCK_IDS}, block_id) and pos_key not in block_pos_to_network:
+        if _matching_suffix_map({k: None for k in mechanical_block_ids}, block_id) and pos_key not in block_pos_to_network:
             diagnostics.append(
                 MachineDiagnostic(
                     code="mechanical.block_not_in_network",
@@ -313,7 +353,7 @@ def validate_create_machine(ir: dict[str, Any]) -> list[dict[str, Any]]:
             or props.get("block_entity_id")
         )
         if isinstance(entity_id, str):
-            entity_rule = _matching_suffix_map(SUPPORTED_ENTITY_BY_BLOCK, block_id)
+            entity_rule = _matching_suffix_map(supported_entity_by_block, block_id)
             if entity_rule:
                 _, supported_entities = entity_rule
                 if entity_id not in supported_entities:
@@ -340,7 +380,7 @@ def validate_create_machine(ir: dict[str, Any]) -> list[dict[str, Any]]:
     )
     for network in networks:
         member_keys = {(m["x"], m["y"], m["z"]) for m in network["members"]}
-        if len(member_keys) > 1:
+        if connectivity_required and len(member_keys) > 1:
             seed = next(iter(member_keys))
             stack = [seed]
             visited = set()
@@ -377,7 +417,7 @@ def validate_create_machine(ir: dict[str, Any]) -> list[dict[str, Any]]:
                 block = block_by_pos.get(pos_key)
                 if not block:
                     continue
-                rpm_rule = _matching_suffix_map(RPM_LIMITS_BY_BLOCK, block["id"])
+                rpm_rule = _matching_suffix_map(rpm_limits_by_block, block["id"])
                 if rpm_rule and abs(rpm) > rpm_rule[1]:
                     diagnostics.append(
                         MachineDiagnostic(
@@ -397,7 +437,7 @@ def validate_create_machine(ir: dict[str, Any]) -> list[dict[str, Any]]:
                 block = block_by_pos.get(pos_key)
                 if not block:
                     continue
-                su_rule = _matching_suffix_map(SU_LIMITS_BY_BLOCK, block["id"])
+                su_rule = _matching_suffix_map(stress_limits_by_block, block["id"])
                 if su_rule and abs(su) > su_rule[1]:
                     diagnostics.append(
                         MachineDiagnostic(
@@ -410,6 +450,28 @@ def validate_create_machine(ir: dict[str, Any]) -> list[dict[str, Any]]:
                             suggested_fix="Lower stress demand or increase capacity before this component.",
                         )
                     )
+
+    for pattern in banned_patterns:
+        if not isinstance(pattern, dict):
+            continue
+        banned_block_ids = pattern.get("block_ids", [])
+        if not isinstance(banned_block_ids, list) or not banned_block_ids:
+            continue
+        machine_block_ids = {str(block["id"]) for block in blocks}
+        if set(str(b) for b in banned_block_ids).issubset(machine_block_ids):
+            diagnostics.append(
+                MachineDiagnostic(
+                    code=str(pattern.get("code", "banned.pattern")),
+                    message=str(
+                        pattern.get(
+                            "description",
+                            "Machine matches a banned pattern from the selected rule-pack.",
+                        )
+                    ),
+                    block_pos=None,
+                    suggested_fix="Adjust machine topology to avoid this banned pattern.",
+                )
+            )
 
     return [asdict(diagnostic) for diagnostic in diagnostics]
 
@@ -430,24 +492,6 @@ def validate_ir_or_raise(ir: dict[str, Any]) -> None:
     semantic_errors = _check_semantics(ir)
     if semantic_errors:
         raise IRValidationError("IR semantic validation failed:\n" + "\n".join(f"- {e}" for e in semantic_errors))
-
-
-def main() -> int:
-    if len(sys.argv) != 2:
-        print(
-            "Usage: python tools/validate_create_ir.py path/to/ir.json\n"
-            "Tip: do not include angle brackets around the path.",
-            file=sys.stderr,
-        )
-    machine_diagnostics = validate_create_machine(ir)
-    if machine_diagnostics:
-        formatted = "\n".join(
-            "- "
-            + f"[{diag['code']}] {diag['message']} "
-            + f"(block_pos={diag['block_pos']}, suggested_fix={diag['suggested_fix']})"
-            for diag in machine_diagnostics
-        )
-        raise IRValidationError("Create machine validation failed:\n" + formatted)
 
 
 def main() -> int:
