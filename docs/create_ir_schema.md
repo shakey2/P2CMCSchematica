@@ -65,6 +65,7 @@ all compatibility/performance fields:
 - `minecraft_version`
 - `create_version`
 - `installed_mods` (array of `{ id, version }`)
+- `additional_mods` (optional array of `{ id, version }`; currently accepted but ignored in planning with `ADDITIONAL_MODS_STUBBED` warning)
 - `mechanic_policy` (`safe` | `quirks` | `exploits`)
 - `performance_constraints`
   - `tps_safe`
@@ -76,6 +77,7 @@ all compatibility/performance fields:
 - `installed_mods` contains duplicate IDs
 - any mod version is ambiguous (`*`, `latest`, `any`, `unknown`)
 - `requested_features.block_chain` references unsupported blocks for the selected environment
+- `requested_features.block_chain` contains non-vanilla/Create namespaces (reject with `UNSUPPORTED_MOD_NAMESPACE`)
 - `requested_features.target_su` exceeds environment limits
 
 When a capability mismatch is detected, the validator includes machine-readable

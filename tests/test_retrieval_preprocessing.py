@@ -101,3 +101,27 @@ def test_planner_pipeline_builds_debug_trace() -> None:
     assert planned["planner_trace"]["why_this_rule"]
     assert planned["planner_trace"]["why_this_example"]
     assert planned["planner_trace"]["why_this_example"][0]["id"] == "compact_high"
+
+
+def test_planner_pipeline_stubs_additional_mods_with_explicit_warning() -> None:
+    planned = pipeline.build_planner_prompt_context(
+        {
+            "intent": {"size": {"x": 8, "y": 6, "z": 8}, "su": 5000},
+            "environment": {
+                "loader": "forge",
+                "minecraft_version": "1.20.1",
+                "create_version": "0.5.1f",
+            },
+            "additional_mods": [{"id": "ae2", "version": "15.2.0"}],
+        },
+        [{"id": "minimal", "ir": _example_ir(su=64, block_count=1, size=1)}],
+        top_k=1,
+        include_full_ir=0,
+    )
+
+    assert planned["warnings"] == [
+        {
+            "code": "ADDITIONAL_MODS_STUBBED",
+            "message": "additional_mods is currently ignored by planner rule-selection.",
+        }
+    ]

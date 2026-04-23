@@ -96,3 +96,24 @@ def test_generation_request_returns_machine_readable_fallback_suggestions() -> N
         assert "fallback_suggestions" in text
         assert "alternative_block_chain" in text
         assert "reduced_target_su" in text
+
+
+def test_generation_request_rejects_non_vanilla_non_create_namespaces() -> None:
+    request = {
+        "fingerprint": "abc123",
+        "loader": "forge",
+        "minecraft_version": "1.20.1",
+        "create_version": "0.5.1f",
+        "installed_mods": [{"id": "create", "version": "0.5.1f"}],
+        "mechanic_policy": "safe",
+        "performance_constraints": {"tps_safe": True, "entity_caps": {"max_total": 64}},
+        "requested_features": {
+            "block_chain": ["thermal:machine_frame"],
+        },
+    }
+
+    try:
+        validator.validate_generation_request_or_raise(request)
+        raise AssertionError("Expected unsupported namespace to fail validation.")
+    except validator.IRValidationError as exc:
+        assert "UNSUPPORTED_MOD_NAMESPACE" in str(exc)
