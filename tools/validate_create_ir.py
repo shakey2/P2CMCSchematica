@@ -27,6 +27,9 @@ except ImportError as exc:  # pragma: no cover
 
 
 SCHEMA_PATH = Path(__file__).resolve().parents[1] / "schemas" / "create_ir.schema.json"
+REQUEST_SCHEMA_PATH = (
+    Path(__file__).resolve().parents[1] / "schemas" / "generation_request.schema.json"
+)
 
 
 class IRValidationError(ValueError):
@@ -99,6 +102,55 @@ SUPPORTED_ENTITY_BY_BLOCK: dict[str, set[str]] = {
 def _load_schema() -> dict[str, Any]:
     with SCHEMA_PATH.open("r", encoding="utf-8") as f:
         return json.load(f)
+
+
+def _load_request_schema() -> dict[str, Any]:
+    with REQUEST_SCHEMA_PATH.open("r", encoding="utf-8") as f:
+        return json.load(f)
+
+
+def validate_generation_request_or_raise(request: dict[str, Any]) -> None:
+    """Validate upstream request context before attempting generation."""
+    schema = _load_request_schema()
+    validator = jsonschema.Draft202012Validator(schema)
+    structural_errors = sorted(validator.iter_errors(request), key=lambda e: list(e.path))
+    if structural_errors:
+        formatted = "\n".join(
+            f"- {'/'.join(str(p) for p in err.path) or '<root>'}: {err.message}"
+            for err in structural_errors
+        )
+        raise IRValidationError(f"Generation request validation failed:\n{formatted}")
+
+    fingerprint = str(request.get("fingerprint", "")).strip()
+    if not fingerprint:
+        raise IRValidationError(
+            "Generation request validation failed:\n"
+            "- fingerprint: missing or blank fingerprint is not allowed"
+        )
+
+    installed_mods = request.get("installed_mods", [])
+    if not isinstance(installed_mods, list):
+        return
+
+    seen_ids: set[str] = set()
+    ambiguous_ids: set[str] = set()
+    for mod in installed_mods:
+        if not isinstance(mod, dict):
+            continue
+        mod_id = str(mod.get("id", "")).strip()
+        mod_version = str(mod.get("version", "")).strip()
+        if mod_id in seen_ids:
+            ambiguous_ids.add(mod_id)
+        seen_ids.add(mod_id)
+        if mod_version in {"*", "latest", "any", "unknown"}:
+            ambiguous_ids.add(mod_id or "<empty-id>")
+
+    if ambiguous_ids:
+        ids = ", ".join(sorted(ambiguous_ids))
+        raise IRValidationError(
+            "Generation request validation failed:\n"
+            f"- installed_mods: ambiguous mod fingerprint for ids [{ids}]"
+        )
 
 
 def _check_semantics(ir: dict[str, Any]) -> list[str]:

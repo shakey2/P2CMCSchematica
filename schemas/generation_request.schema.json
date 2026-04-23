@@ -1,0 +1,95 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://p2cmcschematica.local/schemas/generation-request.schema.json",
+  "title": "Create Generation Request",
+  "type": "object",
+  "required": [
+    "fingerprint",
+    "loader",
+    "minecraft_version",
+    "create_version",
+    "installed_mods",
+    "mechanic_policy",
+    "performance_constraints"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "fingerprint": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Stable request fingerprint used to pin generation context."
+    },
+    "loader": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9_.-]+$"
+    },
+    "minecraft_version": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^[0-9]+\\.[0-9]+(\\.[0-9]+)?$"
+    },
+    "create_version": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^[0-9A-Za-z.+_-]+$"
+    },
+    "installed_mods": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "version"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "^[a-z0-9_.-]+$"
+          },
+          "version": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    },
+    "mechanic_policy": {
+      "type": "string",
+      "enum": [
+        "safe",
+        "quirks",
+        "exploits"
+      ]
+    },
+    "performance_constraints": {
+      "type": "object",
+      "required": [
+        "tps_safe",
+        "entity_caps"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "tps_safe": {
+          "type": "boolean"
+        },
+        "entity_caps": {
+          "type": "object",
+          "required": [
+            "max_total"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "max_total": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        }
+      }
+    }
+  }
+}

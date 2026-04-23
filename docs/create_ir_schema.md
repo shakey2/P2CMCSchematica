@@ -5,6 +5,7 @@ This repository now includes a strict IR schema and a validation gate that shoul
 ## Files
 
 - Schema: `schemas/create_ir.schema.json`
+- Request schema: `schemas/generation_request.schema.json`
 - Validator: `tools/validate_create_ir.py`
 
 ## IR shape
@@ -53,6 +54,27 @@ Diagnostic shape:
 ```
 
 Malformed AI output must be rejected before compilation.
+
+## Required generation request object
+
+Before generation starts, the request context must include a non-ambiguous fingerprint and
+all compatibility/performance fields:
+
+- `fingerprint` (required, non-empty)
+- `loader`
+- `minecraft_version`
+- `create_version`
+- `installed_mods` (array of `{ id, version }`)
+- `mechanic_policy` (`safe` | `quirks` | `exploits`)
+- `performance_constraints`
+  - `tps_safe`
+  - `entity_caps.max_total`
+
+`validate_generation_request_or_raise(...)` rejects generation when:
+
+- `fingerprint` is missing or blank
+- `installed_mods` contains duplicate IDs
+- any mod version is ambiguous (`*`, `latest`, `any`, `unknown`)
 
 ## Usage
 
