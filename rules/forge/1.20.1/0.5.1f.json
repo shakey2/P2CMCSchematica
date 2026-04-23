@@ -1,0 +1,92 @@
+{
+  "supported_blocks": {
+    "create:shaft": {"properties": ["axis"]},
+    "create:cogwheel": {"properties": ["axis"]},
+    "create:large_cogwheel": {"properties": ["axis"]},
+    "create:gearbox": {"properties": ["axis"]},
+    "create:clutch": {"properties": ["axis"]},
+    "create:gearshift": {"properties": ["axis"]},
+    "create:encased_chain_drive": {"properties": ["axis"]},
+    "create:mechanical_belt": {"properties": ["part"]}
+  },
+  "kinetic_rules": {
+    "mechanical_block_ids": [
+      "create:shaft",
+      "create:cogwheel",
+      "create:large_cogwheel",
+      "create:gearbox",
+      "create:clutch",
+      "create:gearshift",
+      "create:encased_chain_drive",
+      "create:mechanical_belt"
+    ],
+    "orientation_required_by_block": {
+      "create:shaft": ["axis"],
+      "create:cogwheel": ["axis"],
+      "create:large_cogwheel": ["axis"],
+      "create:gearbox": ["axis"],
+      "create:clutch": ["axis"],
+      "create:gearshift": ["axis"],
+      "create:encased_chain_drive": ["axis"]
+    },
+    "rpm_limits_by_block": {
+      "create:shaft": 256,
+      "create:cogwheel": 256,
+      "create:large_cogwheel": 128,
+      "create:gearbox": 128,
+      "create:clutch": 128,
+      "create:gearshift": 128,
+      "create:encased_chain_drive": 96,
+      "create:mechanical_belt": 64
+    },
+    "stress_limits_by_block": {
+      "create:shaft": 16384,
+      "create:cogwheel": 16384,
+      "create:large_cogwheel": 8192,
+      "create:gearbox": 4096,
+      "create:clutch": 4096,
+      "create:gearshift": 4096,
+      "create:encased_chain_drive": 2048,
+      "create:mechanical_belt": 1024
+    },
+    "supported_entity_by_block": {
+      "create:shaft": ["create:kinetic_block_entity"],
+      "create:cogwheel": ["create:kinetic_block_entity"],
+      "create:large_cogwheel": ["create:kinetic_block_entity"],
+      "create:gearbox": ["create:kinetic_block_entity"],
+      "create:clutch": ["create:kinetic_block_entity"],
+      "create:gearshift": ["create:kinetic_block_entity"],
+      "create:encased_chain_drive": ["create:kinetic_block_entity"],
+      "create:mechanical_belt": ["create:belt_block_entity"]
+    },
+    "connectivity": {
+      "require_connected": true
+    }
+  },
+  "vanilla_mechanics": {
+    "waterlogging": {
+      "allow_source_replacement": false,
+      "tick_order_strict": true
+    },
+    "observer_updates": {
+      "quasi_connectivity": false,
+      "edge_update_propagation": true
+    }
+  },
+  "incompatibilities": {
+    "known": [
+      {
+        "id": "create-belt-cross-chunk-desync",
+        "severity": "warning",
+        "description": "Long belts crossing chunk boundaries can desync under lag."
+      }
+    ],
+    "banned_patterns": [
+      {
+        "code": "banned.mixed_axis_gearbox_ladder",
+        "block_ids": ["create:gearbox", "create:large_cogwheel"],
+        "description": "Do not alternate vertical gearbox ladders with large cogs every block."
+      }
+    ]
+  }
+}
